@@ -1,6 +1,6 @@
 package com.example.poc.service;
 
-import com.example.poc.dao.ProductDao;
+import com.example.poc.repository.ProductRepository;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,13 +35,13 @@ public class DiagService {
     }
 
     private final JdbcTemplate jdbc;
-    private final ProductDao productDao;
+    private final ProductRepository productRepository;
     private final TransactionTemplate writeTx;
     private final TransactionTemplate readTx;
 
-    public DiagService(JdbcTemplate jdbc, ProductDao productDao, PlatformTransactionManager txManager) {
+    public DiagService(JdbcTemplate jdbc, ProductRepository productRepository, PlatformTransactionManager txManager) {
         this.jdbc = jdbc;
-        this.productDao = productDao;
+        this.productRepository = productRepository;
         this.writeTx = new TransactionTemplate(txManager);
         this.readTx = new TransactionTemplate(txManager);
         this.readTx.setReadOnly(true);
@@ -100,11 +100,11 @@ public class DiagService {
         record Written(int stock, String instance) {
         }
         Written written = writeTx.execute(status -> {
-            productDao.addStock(1L, 1);
-            return new Written(productDao.selectById(1L).orElseThrow().stock(), currentConnection().instanceId());
+            productRepository.addStock(1L, 1);
+            return new Written(productRepository.findById(1L).orElseThrow().stock(), currentConnection().instanceId());
         });
         var read = readTx.execute(status ->
-                new Written(productDao.selectById(1L).orElseThrow().stock(), currentConnection().instanceId()));
+                new Written(productRepository.findById(1L).orElseThrow().stock(), currentConnection().instanceId()));
         return new ProbeResult(written.stock(), read.stock(), written.stock() == read.stock(),
                 written.instance(), read.instance());
     }

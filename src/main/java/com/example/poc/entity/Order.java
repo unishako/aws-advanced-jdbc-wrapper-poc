@@ -7,10 +7,9 @@ import org.seasar.doma.GeneratedValue;
 import org.seasar.doma.GenerationType;
 import org.seasar.doma.Id;
 import org.seasar.doma.Table;
-import org.seasar.doma.jdbc.entity.NamingType;
 
 /** 注文 (テーブル名は予約語を避けて orders)。 */
-@Entity(immutable = true, naming = NamingType.SNAKE_LOWER_CASE)
+@Entity(immutable = true)
 @Table(name = "orders")
 public record Order(
         @Id @GeneratedValue(strategy = GenerationType.IDENTITY) Long id,

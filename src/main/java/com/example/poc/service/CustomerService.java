@@ -1,6 +1,6 @@
 package com.example.poc.service;
 
-import com.example.poc.dao.CustomerDao;
+import com.example.poc.repository.CustomerRepository;
 import com.example.poc.entity.Customer;
 import java.util.List;
 import org.springframework.http.HttpStatus;
@@ -11,30 +11,30 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class CustomerService {
 
-    private final CustomerDao customerDao;
+    private final CustomerRepository customerRepository;
 
-    public CustomerService(CustomerDao customerDao) {
-        this.customerDao = customerDao;
+    public CustomerService(CustomerRepository customerRepository) {
+        this.customerRepository = customerRepository;
     }
 
     @Transactional(readOnly = true)
     public List<Customer> list(int limit, int offset) {
-        return customerDao.selectPage(limit, offset);
+        return customerRepository.findAll(limit, offset);
     }
 
     @Transactional(readOnly = true)
     public Customer get(Long id) {
-        return customerDao.selectById(id)
+        return customerRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "顧客が存在しません: " + id));
     }
 
     @Transactional(readOnly = true)
     public long count() {
-        return customerDao.count();
+        return customerRepository.count();
     }
 
     @Transactional
     public Customer create(String name, String email, String prefecture) {
-        return customerDao.insert(new Customer(null, name, email, prefecture, null)).getEntity();
+        return customerRepository.insert(new Customer(null, name, email, prefecture, null));
     }
 }

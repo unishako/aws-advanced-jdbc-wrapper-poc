@@ -18,6 +18,8 @@ dependencies {
     // Doma 3 (Spring Boot 連携スターターは Doma 3.11.1 / Spring Boot 4.0.0 向けのため、Doma 本体は最新版に上書き)
     implementation("org.seasar.doma.boot:doma-spring-boot-starter:3.0.0")
     implementation("org.seasar.doma:doma-core:3.15.0")
+    // スターターが引き込む doma-slf4j は 3.11.1 のため、doma-core とそろえる
+    implementation("org.seasar.doma:doma-slf4j:3.15.0")
     annotationProcessor("org.seasar.doma:doma-processor:3.15.0")
 
     // AWS Advanced JDBC Wrapper (内部コネクションプールに HikariCP を使用)
@@ -32,6 +34,8 @@ dependencies {
 tasks.withType<JavaCompile> {
     options.release = 25
     options.encoding = "UTF-8"
+    // すべてのエンティティにメタモデル (Customer_ など) を生成する。@Entity ごとに metamodel = @Metamodel を書かなくてよい
+    options.compilerArgs.add("-Adoma.metamodel.enabled=true")
 }
 
 tasks.withType<Test> {

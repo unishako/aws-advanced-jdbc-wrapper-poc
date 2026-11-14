@@ -5,14 +5,14 @@ import org.seasar.doma.GeneratedValue;
 import org.seasar.doma.GenerationType;
 import org.seasar.doma.Id;
 import org.seasar.doma.Table;
-import org.seasar.doma.jdbc.entity.NamingType;
 
-@Entity(immutable = true, naming = NamingType.SNAKE_LOWER_CASE)
+@Entity(immutable = true)
 @Table(name = "order_item")
 public record OrderItem(
         @Id @GeneratedValue(strategy = GenerationType.IDENTITY) Long id,
         Long orderId,
         Long productId,
-        Integer quantity,
-        Integer unitPrice) {
+        // 集計 (sum) の結果の型は引数の型で決まるため、オーバーフローしないよう Long にしている
+        Long quantity,
+        Long unitPrice) {
 }

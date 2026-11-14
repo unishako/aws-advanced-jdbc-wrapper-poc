@@ -1,9 +1,9 @@
 package com.example.poc.service;
 
-import com.example.poc.dao.CustomerDao;
-import com.example.poc.dao.OrderDao;
-import com.example.poc.dao.OrderItemDao;
-import com.example.poc.dao.ProductDao;
+import com.example.poc.repository.CustomerRepository;
+import com.example.poc.repository.OrderRepository;
+import com.example.poc.repository.OrderItemRepository;
+import com.example.poc.repository.ProductRepository;
 import com.example.poc.entity.CategorySales;
 import com.example.poc.entity.Order;
 import com.example.poc.entity.OrderItem;
@@ -24,59 +24,59 @@ public class OrderService {
     public record OrderDetail(Order order, List<OrderItem> items) {
     }
 
-    private final CustomerDao customerDao;
-    private final ProductDao productDao;
-    private final OrderDao orderDao;
-    private final OrderItemDao orderItemDao;
+    private final CustomerRepository customerRepository;
+    private final ProductRepository productRepository;
+    private final OrderRepository orderRepository;
+    private final OrderItemRepository orderItemRepository;
 
-    public OrderService(CustomerDao customerDao, ProductDao productDao, OrderDao orderDao, OrderItemDao orderItemDao) {
-        this.customerDao = customerDao;
-        this.productDao = productDao;
-        this.orderDao = orderDao;
-        this.orderItemDao = orderItemDao;
+    public OrderService(CustomerRepository customerRepository, ProductRepository productRepository, OrderRepository orderRepository, OrderItemRepository orderItemRepository) {
+        this.customerRepository = customerRepository;
+        this.productRepository = productRepository;
+        this.orderRepository = orderRepository;
+        this.orderItemRepository = orderItemRepository;
     }
 
     @Transactional(readOnly = true)
     public OrderDetail get(Long id) {
-        Order order = orderDao.selectById(id)
+        Order order = orderRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "注文が存在しません: " + id));
-        return new OrderDetail(order, orderItemDao.selectByOrderId(id));
+        return new OrderDetail(order, orderItemRepository.findByOrderId(id));
     }
 
     @Transactional(readOnly = true)
     public List<Order> listByCustomer(Long customerId, int limit) {
-        return orderDao.selectByCustomerId(customerId, limit);
+        return orderRepository.findByCustomerId(customerId, limit);
     }
 
     @Transactional(readOnly = true)
     public List<CategorySales> summarizeByCategory() {
-        return orderDao.summarizeByCategory();
+        return orderRepository.summarizeByCategory();
     }
 
     /** 注文を登録する (在庫引当 → 注文 → 明細)。1トランザクションで Writer に対して実行される。 */
     @Transactional
     public OrderDetail place(Long customerId, List<Line> lines) {
-        customerDao.selectById(customerId)
+        customerRepository.findById(customerId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "顧客が存在しません: " + customerId));
 
         List<OrderItem> items = new ArrayList<>();
         int total = 0;
         for (Line line : lines) {
-            Product product = productDao.selectById(line.productId())
+            Product product = productRepository.findById(line.productId())
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.NOT_FOUND, "商品が存在しません: " + line.productId()));
-            if (productDao.addStock(product.id(), -line.quantity()) == 0) {
+            if (productRepository.addStock(product.id(), -line.quantity()) == 0) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "在庫が不足しています: " + product.id());
             }
-            items.add(new OrderItem(null, null, product.id(), line.quantity(), product.price()));
+            items.add(new OrderItem(null, null, product.id(), (long) line.quantity(), product.price().longValue()));
             total += product.price() * line.quantity();
         }
 
-        Order order = orderDao.insert(new Order(null, customerId, "NEW", total, null)).getEntity();
+        Order order = orderRepository.insert(new Order(null, customerId, "NEW", total, null));
         List<OrderItem> saved = items.stream()
-                .map(i -> orderItemDao
+                .map(i -> orderItemRepository
                         .insert(new OrderItem(null, order.id(), i.productId(), i.quantity(), i.unitPrice()))
-                        .getEntity())
+                        )
                 .toList();
         return new OrderDetail(order, saved);
     }
