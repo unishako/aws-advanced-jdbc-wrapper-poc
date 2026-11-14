@@ -91,6 +91,11 @@ wrapper のオプションとプールの本数は、独立した設定項目で
 | `poc.wrapper.failover.*` | フェイルオーバーのモード・タイムアウト・トポロジー更新間隔 |
 | `poc.pool.maximum-size` | 1インスタンスあたりの最大接続数 (Writer / Reader それぞれに適用) |
 | `poc.pool.minimum-idle` | 1インスタンスあたりの最小アイドル接続数 |
+| `poc.pool.auto-commit` | 自動コミット(既定の設定は `false`)。コミットと、ロールバックは `@Transactional` が制御します。`@Transactional` の外で実行した更新は、コミットされません |
+| `poc.pool.transaction-isolation` | トランザクション分離レベル(既定の設定は `TRANSACTION_READ_COMMITTED`) |
+| `poc.pool.read-only` | プールが作る接続を読み取り専用にするか(既定の設定は `false`、HikariCP の既定値と同じ)。`true` にすると Writer の更新ができなくなります。読み書きの振り分けは、この設定ではなく `@Transactional(readOnly = true)` で行います |
+
+`application.properties` では、各設定に `[必須]` `[環境]` `[調整]` `[変数]` のラベルを付けています(意味は、ファイルの先頭の凡例を参照)。
 
 DataSource は Spring Boot 標準の `DriverManagerDataSource`(プールなし)で、プールは wrapper の内部プール
 (`connectionPoolType=hikari`)が担当します。設定値は `spring.datasource.url` のパラメータとして wrapper に渡されます。
