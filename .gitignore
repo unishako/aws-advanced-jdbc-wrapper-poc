@@ -1,0 +1,17 @@
+# DB のデータ (Writer / Reader)
+docker/postgres/
+
+# Gradle / ビルド成果物
+.gradle/
+build/
+
+# 環境変数のファイル (パスワードなどを書く可能性があるため)
+.env
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store

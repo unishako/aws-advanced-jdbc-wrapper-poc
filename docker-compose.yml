@@ -1,0 +1,159 @@
+name: aws-advanced-jdbc-wrapper-poc
+
+# Aurora PostgreSQL (Writer/Reader) をローカルで模倣する構成。
+#  - postgres-writer : 書き込み用インスタンス (Aurora の Writer 相当)
+#  - postgres-reader : 読み取り用インスタンス (Writer からストリーミングレプリケーション)
+# Aurora のエンドポイント名は、compose ネットワーク内の alias で RDS 形式の名前を再現している。
+#   クラスターエンドポイント : poc.cluster-abcdefghijkl.ap-northeast-1.rds.amazonaws.com  -> Writer
+#   リーダーエンドポイント   : poc.cluster-ro-abcdefghijkl.ap-northeast-1.rds.amazonaws.com -> Reader
+#   インスタンスエンドポイント: <instance>.abcdefghijkl.ap-northeast-1.rds.amazonaws.com
+
+x-postgres-common: &postgres-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.postgres
+  restart: unless-stopped
+  environment: &postgres-env
+    POSTGRES_USER: ${POSTGRES_USER:-postgres}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    POSTGRES_DB: ${POSTGRES_DB:-app}
+    REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-replicator}
+    # 日本語環境向け初期化設定(初回のデータディレクトリ作成時のみ有効)
+    #  - エンコーディング: UTF-8
+    #  - 照合順序: ICUのja-JPロケール
+    #  - libcロケール: C.UTF-8(ICU利用時のフォールバック)
+    POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale-provider=icu --icu-locale=ja-JP --locale=C.UTF-8"
+    # データ格納先を固定(未指定だと 18以降は /var/lib/postgresql/<メジャーバージョン>/docker になる)
+    PGDATA: /var/lib/postgresql/data
+    TZ: Asia/Tokyo
+    PGTZ: Asia/Tokyo
+  healthcheck:
+    # TCP(127.0.0.1)で確認することで、初期化中の一時サーバーではなく本起動後に healthy になる
+    test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-app}"]
+    interval: 5s
+    timeout: 5s
+    retries: 20
+
+services:
+  postgres-writer:
+    <<: *postgres-common
+    container_name: aurora-poc-writer
+    command:
+      - postgres
+      - -c
+      - poc.instance_id=writer
+      - -c
+      - poc.peer_id=reader
+      - -c
+      - timezone=Asia/Tokyo
+      - -c
+      - log_timezone=Asia/Tokyo
+      - -c
+      - lc_messages=ja_JP.UTF-8
+      - -c
+      - lc_monetary=ja_JP.UTF-8
+      - -c
+      - lc_numeric=ja_JP.UTF-8
+      - -c
+      - lc_time=ja_JP.UTF-8
+      - -c
+      - default_text_search_config=pg_catalog.simple
+    ports:
+      # ローカルからのみ接続可能にする (既定のパスワードのまま外部に公開しないため)
+      - "127.0.0.1:${WRITER_PORT:-5432}:5432"
+    volumes:
+      - ./docker/postgres/writer:/var/lib/postgresql
+      # 初回起動時に 01〜04 が順に実行される(レプリケーション設定 / Aurora関数 / テーブル / 初期データ)
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    networks:
+      aurora:
+        aliases:
+          - writer.abcdefghijkl.ap-northeast-1.rds.amazonaws.com
+          - poc.cluster-abcdefghijkl.ap-northeast-1.rds.amazonaws.com
+
+  postgres-reader:
+    <<: *postgres-common
+    container_name: aurora-poc-reader
+    depends_on:
+      postgres-writer:
+        condition: service_healthy
+    environment:
+      <<: *postgres-env
+      WRITER_HOST: postgres-writer
+    entrypoint: ["bash", "/reader-entrypoint.sh"]
+    command:
+      - postgres
+      - -c
+      - poc.instance_id=reader
+      - -c
+      - poc.peer_id=writer
+      - -c
+      - hot_standby=on
+      - -c
+      - hot_standby_feedback=on
+      - -c
+      - timezone=Asia/Tokyo
+      - -c
+      - log_timezone=Asia/Tokyo
+      - -c
+      - lc_messages=ja_JP.UTF-8
+      - -c
+      - lc_monetary=ja_JP.UTF-8
+      - -c
+      - lc_numeric=ja_JP.UTF-8
+      - -c
+      - lc_time=ja_JP.UTF-8
+      - -c
+      - default_text_search_config=pg_catalog.simple
+    ports:
+      - "127.0.0.1:${READER_PORT:-5433}:5432"
+    volumes:
+      - ./docker/postgres/reader:/var/lib/postgresql
+      - ./docker/reader-entrypoint.sh:/reader-entrypoint.sh:ro
+    networks:
+      aurora:
+        aliases:
+          - reader.abcdefghijkl.ap-northeast-1.rds.amazonaws.com
+          - poc.cluster-ro-abcdefghijkl.ap-northeast-1.rds.amazonaws.com
+
+  # 検証用アプリ。偽の RDS ホスト名は compose ネットワーク内でしか解決できないため、アプリもここで動かす
+  app:
+    build:
+      context: .
+      target: runtime
+    container_name: aws-advanced-jdbc-wrapper-poc-app
+    restart: unless-stopped
+    depends_on:
+      postgres-writer:
+        condition: service_healthy
+      postgres-reader:
+        condition: service_healthy
+    environment: &app-env
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+      TZ: Asia/Tokyo
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    networks:
+      - aurora
+
+  # DB に接続するテスト(起動時のプール作成の確認など)。
+  #   docker compose --profile test run --rm app-test
+  app-test:
+    profiles: ["test"]
+    build:
+      context: .
+      target: test
+    depends_on:
+      postgres-writer:
+        condition: service_healthy
+      postgres-reader:
+        condition: service_healthy
+    environment: *app-env
+    networks:
+      - aurora
+
+networks:
+  aurora:
+    name: aurora-poc

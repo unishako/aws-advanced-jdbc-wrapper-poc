@@ -1,0 +1,6 @@
+# Aurora PostgreSQL の現行最新メジャー(18系)に合わせる
+FROM postgres:18
+
+# 日本語ロケールを生成(ログ・エラーメッセージの日本語化に必要)
+RUN localedef -i ja_JP -c -f UTF-8 -A /usr/share/locale/locale.alias ja_JP.UTF-8
+ENV LANG=ja_JP.utf8
