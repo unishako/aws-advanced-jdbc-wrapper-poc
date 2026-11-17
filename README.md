@@ -50,6 +50,7 @@ docker compose up -d --build
 
 初回起動時に、テーブルが自動作成され、初期データ(顧客10,000件・商品1,000件・注文50,000件)が投入されます。
 データは `docker/postgres/` に保存されます。
+以前の版からの更新などで、すでに `docker/postgres/` にデータがある場合は、`bash scripts/reset-db.sh` で作り直してください(Aurora の関数、レプリケーションのスロット、インスタンス名は、初回起動時にしか反映されません)。
 
 起動後の確認例:
 
@@ -130,7 +131,8 @@ Reader は2台(`reader1`、`reader2`)です。Reader を増やす場合は、`do
 | `roundRobin` 60回 | reader1: 30、reader2: 30(交互) |
 | `leastConnections` 200回・並列20 | reader1: 98、reader2: 102 |
 | プール | アプリごと・Reader ごとに作られる(各 Reader に最小アイドル数の接続)。**Reader が増えると、アプリ1台あたりの接続数は、Reader の台数 × 上限になる** |
-| Reader を1台停止 | 停止した Reader が選ばれたとき、`open-connection-retry-timeout-ms` の時間(既定30秒、5000なら約5秒)待ってから、残りの Reader に切り替わる。エラーにはならない |
+| Reader を1台停止(約10秒後) | 停止した Reader が、Writer から見たトポロジーから外れ、以降の読み取りはすべて残りの Reader に接続(20回とも最大0.02秒)。再開すると、トポロジーと分散に復帰する |
+| Reader の停止直後(トポロジーから外れる前) | 停止した Reader が選ばれると、`open-connection-retry-timeout-ms` の時間(既定30秒、5000なら約5秒)待ってから、残りの Reader に切り替わる。エラーにはならない |
 
 選択方式は、設定ファイルを変えずに、環境変数で一時的に切り替えて試せます(例: 一時的なアプリのコンテナを起動)。
 
@@ -144,8 +146,8 @@ docker stop poc-app-rr
 
 注意:
 
-- 停止した Reader は、トポロジーに残り続けます(本物の Aurora では、更新が止まった Reader は、時間差でトポロジーから外れます)。そのため、上の待ちが、本物より起きやすくなります。
-- `scripts/failover.sh` は、`reader1` を昇格する単純な手順です。`reader2` は旧 Writer を追従したままになり、新しい Writer の更新を受け取りません。
+- 停止した Reader がトポロジーから外れるのは、`02-aurora-emulation.sql` が、Writer から呼ばれたときに、レプリケーションが切れている(スロットが `active` でない)Reader を結果から除くためです。本物の Aurora で、更新が止まった Reader が時間差で外れるのを模倣しています。Reader から呼ばれた場合は、他のインスタンスの死活が分からないため、全メンバーを返します。接続が突然切れた場合など、Writer が切断に気づくまでの間は、トポロジーに残る場合があります(未検証)。
+- トポロジーのメンバー一覧(`poc.members`)は、起動時の設定です。フェイルオーバー後も、Reader から呼ばれた関数は、先頭の `writer` を Writer として扱います。
 
 ## テスト
 
@@ -161,19 +163,30 @@ docker compose --profile test run --rm --build app-test
 - Writer / Reader の接続がプールされ、再利用される(連続10回の接続で、バックエンドのプロセスが使い回される)
 - 読み取り専用トランザクションは Reader に、書き込みトランザクションは Writer に接続する
 
+`ReaderScaleOutTest`:
+
+- Writer から見たトポロジーに、`writer`、`reader1`、`reader2` の3台が含まれる
+- 読み取りが、2台の Reader の両方に分散される(`random` で30回。片方が一度も選ばれない確率は約20億分の1)
+
 環境変数 `RUN_DB_TESTS=true` のときだけ実行されます(`./gradlew test` を単体で実行した場合はスキップされます)。
 
 ## フェイルオーバーの確認
 
 ```sh
-bash scripts/failover.sh               # Reader を昇格し、旧 Writer を停止、エンドポイントを付け替え
+bash scripts/failover.sh               # 旧 Writer を停止 → reader1 を昇格 → エンドポイントを付け替え → reader2 を新しい Writer に付け替え
 curl localhost:8080/api/diag/connections
 bash scripts/reset-db.sh               # 元に戻す(docker/postgres/ のデータは削除される)
 ```
 
-作者の環境(Docker Desktop on macOS)での確認結果: 直後の最初のリクエストは約15秒かかりましたが、エラーにならず成功し(wrapper の `failover2` が再接続)、
-以降は昇格したインスタンスで読み書きできました。所要時間は環境や設定(`poc.wrapper.failover.*`)によって変わります。
-旧 Writer を Reader として復帰させる処理は含めていません(`reset-db.sh` で作り直します)。
+作者の環境(Docker Desktop on macOS)での確認結果:
+
+- Reader が1台の構成(旧版のスクリプト): 直後の最初のリクエストは約15秒かかりましたが、エラーにならず成功し(wrapper の `failover2` が再接続)、以降は昇格したインスタンスで読み書きできました。
+- Reader が2台の構成: 昇格した `reader1` が `MASTER` として、`reader2` が Reader として、トポロジーに載り、旧 Writer は外れました。読み取りは `reader2`、書き込みは `reader1` に向かい、新しい Writer への書き込みが `reader2` にも届きました。
+
+所要時間は環境や設定(`poc.wrapper.failover.*`)によって変わります。旧 Writer を Reader として復帰させる処理は含めていません(`reset-db.sh` で作り直します)。
+
+**旧 Writer を先に停止する理由**: 先に昇格してから旧 Writer を停止すると、旧 Writer が停止時に書く最後の WAL を、まだ接続していた `reader2` だけが受け取り、昇格済みの `reader1` は受け取れません。その結果、`reader2` が新しい Writer より先に進み、追従できなくなります(本物の Aurora は、共有ストレージなので起きません)。
+また、昇格した `reader1` をネットワークに付け直すと、compose が付けたサービス名の別名が失われるため、別名を指定し直しています。
 
 ## 参考
 
