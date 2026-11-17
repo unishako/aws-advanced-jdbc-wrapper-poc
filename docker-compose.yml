@@ -2,7 +2,8 @@ name: aws-advanced-jdbc-wrapper-poc
 
 # Aurora PostgreSQL (Writer/Reader) をローカルで模倣する構成。
 #  - postgres-writer : 書き込み用インスタンス (Aurora の Writer 相当)
-#  - postgres-reader : 読み取り用インスタンス (Writer からストリーミングレプリケーション)
+#  - postgres-reader1: 読み取り用インスタンス (Writer からストリーミングレプリケーション)
+#  - postgres-reader2: 2台目の読み取り用インスタンス (Reader のスケールアウトの検証用)
 # Aurora のエンドポイント名は、compose ネットワーク内の alias で RDS 形式の名前を再現している。
 #   クラスターエンドポイント : poc.cluster-abcdefghijkl.ap-northeast-1.rds.amazonaws.com  -> Writer
 #   リーダーエンドポイント   : poc.cluster-ro-abcdefghijkl.ap-northeast-1.rds.amazonaws.com -> Reader
@@ -43,7 +44,7 @@ services:
       - -c
       - poc.instance_id=writer
       - -c
-      - poc.peer_id=reader
+      - poc.members=writer,reader1,reader2
       - -c
       - timezone=Asia/Tokyo
       - -c
@@ -71,22 +72,23 @@ services:
           - writer.abcdefghijkl.ap-northeast-1.rds.amazonaws.com
           - poc.cluster-abcdefghijkl.ap-northeast-1.rds.amazonaws.com
 
-  postgres-reader:
+  postgres-reader1:
     <<: *postgres-common
-    container_name: aurora-poc-reader
+    container_name: aurora-poc-reader1
     depends_on:
       postgres-writer:
         condition: service_healthy
     environment:
       <<: *postgres-env
       WRITER_HOST: postgres-writer
+      REPLICATION_SLOT: reader1_slot
     entrypoint: ["bash", "/reader-entrypoint.sh"]
     command:
       - postgres
       - -c
-      - poc.instance_id=reader
+      - poc.instance_id=reader1
       - -c
-      - poc.peer_id=writer
+      - poc.members=writer,reader1,reader2
       - -c
       - hot_standby=on
       - -c
@@ -106,14 +108,61 @@ services:
       - -c
       - default_text_search_config=pg_catalog.simple
     ports:
-      - "127.0.0.1:${READER_PORT:-5433}:5432"
+      - "127.0.0.1:${READER1_PORT:-5433}:5432"
     volumes:
-      - ./docker/postgres/reader:/var/lib/postgresql
+      - ./docker/postgres/reader1:/var/lib/postgresql
       - ./docker/reader-entrypoint.sh:/reader-entrypoint.sh:ro
     networks:
       aurora:
         aliases:
-          - reader.abcdefghijkl.ap-northeast-1.rds.amazonaws.com
+          - reader1.abcdefghijkl.ap-northeast-1.rds.amazonaws.com
+          - poc.cluster-ro-abcdefghijkl.ap-northeast-1.rds.amazonaws.com
+
+  # 2台目の Reader (Reader のスケールアウトの検証用)。リーダーエンドポイント (poc.cluster-ro-…) を postgres-reader1 と共有する
+  postgres-reader2:
+    <<: *postgres-common
+    container_name: aurora-poc-reader2
+    depends_on:
+      postgres-writer:
+        condition: service_healthy
+    environment:
+      <<: *postgres-env
+      WRITER_HOST: postgres-writer
+      REPLICATION_SLOT: reader2_slot
+    entrypoint: ["bash", "/reader-entrypoint.sh"]
+    command:
+      - postgres
+      - -c
+      - poc.instance_id=reader2
+      - -c
+      - poc.members=writer,reader1,reader2
+      - -c
+      - hot_standby=on
+      - -c
+      - hot_standby_feedback=on
+      - -c
+      - timezone=Asia/Tokyo
+      - -c
+      - log_timezone=Asia/Tokyo
+      - -c
+      - lc_messages=ja_JP.UTF-8
+      - -c
+      - lc_monetary=ja_JP.UTF-8
+      - -c
+      - lc_numeric=ja_JP.UTF-8
+      - -c
+      - lc_time=ja_JP.UTF-8
+      - -c
+      - default_text_search_config=pg_catalog.simple
+    ports:
+      - "127.0.0.1:${READER2_PORT:-5434}:5432"
+    volumes:
+      - ./docker/postgres/reader2:/var/lib/postgresql
+      - ./docker/reader-entrypoint.sh:/reader-entrypoint.sh:ro
+    networks:
+      aurora:
+        aliases:
+          - reader2.abcdefghijkl.ap-northeast-1.rds.amazonaws.com
           - poc.cluster-ro-abcdefghijkl.ap-northeast-1.rds.amazonaws.com
 
   # 検証用アプリ。偽の RDS ホスト名は compose ネットワーク内でしか解決できないため、アプリもここで動かす
@@ -126,7 +175,9 @@ services:
     depends_on:
       postgres-writer:
         condition: service_healthy
-      postgres-reader:
+      postgres-reader1:
+        condition: service_healthy
+      postgres-reader2:
         condition: service_healthy
     environment: &app-env
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -148,7 +199,9 @@ services:
     depends_on:
       postgres-writer:
         condition: service_healthy
-      postgres-reader:
+      postgres-reader1:
+        condition: service_healthy
+      postgres-reader2:
         condition: service_healthy
     environment: *app-env
     networks:

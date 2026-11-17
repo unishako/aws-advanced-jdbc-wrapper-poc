@@ -6,5 +6,5 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 docker compose down
-rm -rf docker/postgres/writer docker/postgres/reader
+rm -rf docker/postgres/writer docker/postgres/reader1 docker/postgres/reader2
 docker compose up -d --build

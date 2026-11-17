@@ -44,7 +44,8 @@ class ConnectionSettingsTest {
             assertThat(connection.getAutoCommit()).isFalse();
             assertThat(connection.getTransactionIsolation()).isEqualTo(Connection.TRANSACTION_READ_COMMITTED);
             // 実際に Reader に接続していて、サーバー側の分離レベルも READ COMMITTED であること
-            assertThat(serverState(connection)).isEqualTo("reader:read committed");
+            // Reader が複数あるため、reader1 または reader2 のどちらか
+            assertThat(serverState(connection)).matches("reader[12]:read committed");
             connection.rollback();
         }
     }

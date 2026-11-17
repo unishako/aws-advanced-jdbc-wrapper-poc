@@ -10,7 +10,7 @@ set -euo pipefail
 CLUSTER_ID="abcdefghijkl.ap-northeast-1.rds.amazonaws.com"
 NETWORK="aurora-poc"
 WRITER="aurora-poc-writer"
-READER="aurora-poc-reader"
+READER="aurora-poc-reader1"
 DB_USER="${POSTGRES_USER:-postgres}"
 DB_NAME="${POSTGRES_DB:-app}"
 
@@ -23,7 +23,7 @@ docker stop "$WRITER"
 echo "[3/3] クラスターエンドポイントの alias を ${READER} に付け替えます"
 docker network disconnect "$NETWORK" "$READER"
 docker network connect "$NETWORK" "$READER" \
-  --alias "reader.${CLUSTER_ID}" \
+  --alias "reader1.${CLUSTER_ID}" \
   --alias "poc.cluster-${CLUSTER_ID}" \
   --alias "poc.cluster-ro-${CLUSTER_ID}"
 

@@ -1,7 +1,7 @@
 # aws-advanced-jdbc-wrapper-poc
 
 [AWS Advanced JDBC Wrapper](https://github.com/aws/aws-advanced-jdbc-wrapper) の挙動(読み書きの振り分け・コネクションプール・フェイルオーバー)を、
-ローカルの Docker 上で検証するための PoC です。Aurora PostgreSQL の Writer / Reader を PostgreSQL 18 で模倣しています。
+ローカルの Docker 上で検証するための PoC です。Aurora PostgreSQL の Writer 1台と Reader 2台(`reader1`、`reader2`)を、PostgreSQL 18 で模倣しています。
 
 「Aurora を用意せずに、wrapper の設定を試したい」「Spring Boot + Doma で、Writer / Reader の振り分けを確認したい」といった用途を想定しています。
 
@@ -30,7 +30,7 @@ src/                      Spring Boot アプリ (Doma 3 / 業務API / 診断API)
 
 | Aurora | ローカルでの再現 |
 |---|---|
-| クラスター / リーダー / インスタンスエンドポイント | compose ネットワークの alias で RDS 形式のホスト名を提供 (`poc.cluster-…` が Writer、`poc.cluster-ro-…` が Reader) |
+| クラスター / リーダー / インスタンスエンドポイント | compose ネットワークの alias で RDS 形式のホスト名を提供 (`poc.cluster-…` が Writer、`poc.cluster-ro-…` が Reader。reader1 と reader2 が同じ別名を共有し、名前解決で両方のアドレスが返る) |
 | `aurora_replica_status()` / `aurora_db_instance_identifier()` | 同名の SQL 関数を `docker/initdb/02-aurora-emulation.sql` で作成 |
 | Writer / Reader | PostgreSQL のストリーミングレプリケーション |
 
@@ -54,7 +54,7 @@ docker compose up -d --build
 起動後の確認例:
 
 ```sh
-curl localhost:8080/api/diag/connections   # 読み取りは reader、書き込みは writer に接続していること
+curl localhost:8080/api/diag/connections   # 読み取りは reader1 / reader2、書き込みは writer に接続していること
 curl 'localhost:8080/api/products?limit=3' # 商品の一覧 (Reader から取得)
 ```
 
@@ -62,7 +62,8 @@ curl 'localhost:8080/api/products?limit=3' # 商品の一覧 (Reader から取�
 |---|---|
 | アプリ | http://localhost:8080 |
 | Writer (psql 等) | localhost:5432 |
-| Reader (psql 等) | localhost:5433 |
+| Reader1 (psql 等) | localhost:5433 |
+| Reader2 (psql 等) | localhost:5434 |
 
 接続情報は環境変数 `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` で変更できます(既定: postgres / postgres / app)。
 
@@ -89,6 +90,8 @@ wrapper のオプションとプールの本数は、独立した設定項目で
 |---|---|
 | `poc.wrapper.plugins` | `initialConnection,readWriteSplitting,failover2,efm2` |
 | `poc.wrapper.failover.*` | フェイルオーバーのモード・タイムアウト・トポロジー更新間隔 |
+| `poc.wrapper.reader-host-selector-strategy` | Reader が複数あるときの選択方式(`random`(既定)/ `roundRobin` / `leastConnections`(内部プールが必須)など) |
+| `poc.wrapper.initial-connection.open-connection-retry-timeout-ms` | 接続を開くときのリトライの最大時間。停止した Reader が選ばれたとき、この時間だけ待ってから別の Reader に切り替わる(既定 30000) |
 | `poc.pool.maximum-size` | 1インスタンスあたりの最大接続数 (Writer / Reader それぞれに適用) |
 | `poc.pool.minimum-idle` | 1インスタンスあたりの最小アイドル接続数 |
 | `poc.pool.auto-commit` | 自動コミット(既定の設定は `false`)。コミットと、ロールバックは `@Transactional` が制御します。`@Transactional` の外で実行した更新は、コミットされません |
@@ -112,6 +115,37 @@ wrapper やプールのための自前の Java 実装はありません(すべ�
 - Writer の接続数は、プール上限+1 になります(wrapper の内部監視用の接続)。
 - 昇格後のシーケンスは、先読み分(最大32)だけ進むため、ID に飛びが出ます(PostgreSQL の通常の仕様)。
 - Reader の `replica_lag_in_msec` は、書き込みがない間は「最終反映からの経過時間」になるので、大きな値になります。実際の遅延の確認には `/api/diag/write-then-read` を使ってください。
+
+## Reader のスケールアウトの検証
+
+Reader は2台(`reader1`、`reader2`)です。Reader を増やす場合は、`docker-compose.yml` に `postgres-reader3` などを追加し、
+`01-replication.sh` にスロットを足し、`poc.members` に名前を追加します(`02-aurora-emulation.sql` の関数がメンバー一覧からトポロジーを返します)。
+
+作者の環境(Docker Desktop on macOS)での確認結果:
+
+| 確認 | 結果 |
+|---|---|
+| トポロジーの検出 | `writer` / `reader1` / `reader2` の3台を検出。リーダーエンドポイントは両方のアドレスを返す |
+| `random`(既定)60回 | reader1: 28、reader2: 32 |
+| `roundRobin` 60回 | reader1: 30、reader2: 30(交互) |
+| `leastConnections` 200回・並列20 | reader1: 98、reader2: 102 |
+| プール | アプリごと・Reader ごとに作られる(各 Reader に最小アイドル数の接続)。**Reader が増えると、アプリ1台あたりの接続数は、Reader の台数 × 上限になる** |
+| Reader を1台停止 | 停止した Reader が選ばれたとき、`open-connection-retry-timeout-ms` の時間(既定30秒、5000なら約5秒)待ってから、残りの Reader に切り替わる。エラーにはならない |
+
+選択方式は、設定ファイルを変えずに、環境変数で一時的に切り替えて試せます(例: 一時的なアプリのコンテナを起動)。
+
+```sh
+docker run -d --rm --name poc-app-rr --network aurora-poc -p 127.0.0.1:8081:8080 \
+  -e POC_WRAPPER_READER_HOST_SELECTOR_STRATEGY=roundRobin \
+  $(docker inspect -f '{{.Config.Image}}' aws-advanced-jdbc-wrapper-poc-app)
+curl localhost:8081/api/diag/connections
+docker stop poc-app-rr
+```
+
+注意:
+
+- 停止した Reader は、トポロジーに残り続けます(本物の Aurora では、更新が止まった Reader は、時間差でトポロジーから外れます)。そのため、上の待ちが、本物より起きやすくなります。
+- `scripts/failover.sh` は、`reader1` を昇格する単純な手順です。`reader2` は旧 Writer を追従したままになり、新しい Writer の更新を受け取りません。
 
 ## テスト
 

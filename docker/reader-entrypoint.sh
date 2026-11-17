@@ -15,7 +15,7 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
       --username=replicator \
       --pgdata="$PGDATA" \
       --wal-method=stream \
-      --slot=reader_slot \
+      --slot="$REPLICATION_SLOT" \
       --write-recovery-conf \
       --progress
 fi

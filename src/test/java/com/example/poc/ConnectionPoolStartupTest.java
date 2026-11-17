@@ -60,7 +60,8 @@ class ConnectionPoolStartupTest {
     void 読み取り専用トランザクションはReaderに接続する() {
         var connection = diagService.readConnection();
 
-        assertThat(connection.instanceId()).isEqualTo("reader");
+        // Reader が複数あるため、reader1 または reader2 のどちらか
+        assertThat(connection.instanceId()).startsWith("reader");
         assertThat(connection.reader()).isTrue();
     }
 
