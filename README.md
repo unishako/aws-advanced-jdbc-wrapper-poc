@@ -185,6 +185,31 @@ bash scripts/reset-db.sh               # 元に戻す(docker/postgres/ のデー
 
 所要時間は環境や設定(`poc.wrapper.failover.*`)によって変わります。旧 Writer を Reader として復帰させる処理は含めていません(`reset-db.sh` で作り直します)。
 
+### フェイルオーバーの自動テスト
+
+`FailoverTest` が、上の手順をテストの中で実行して確認します。
+
+```sh
+docker compose up -d --build
+docker compose --profile failover-test run --rm --build app-failover-test
+bash scripts/reset-db.sh               # 実行後は DB が元に戻らないので、必ず作り直す
+```
+
+確認する内容:
+
+- 事前に接続を確立し、書き込みは `writer`、読み取りは Reader に向かう
+- `scripts/failover.sh` で Writer を停止すると、wrapper (`failover2`) が新しい Writer (`reader1`) へ再接続し、書き込みが通る(最大120秒再試行する)
+- 新しい Writer への書き込みが、残りの Reader (`reader2`) に反映される
+- 読み取りが、停止した旧 Writer (`writer`) には向かわず、`reader1` か `reader2` で成功する(20回)。昇格した `reader1`(新しい Writer)が読み取りに使われることもあり、`reader2` だけになるとは限りません(繰り返し実行して確認済み)
+
+注意:
+
+- 環境変数 `RUN_FAILOVER_TESTS=true` のときだけ実行されます(`app-failover-test` では設定済み)。通常のテスト(`app-test`)や `./gradlew build` では実行されません。
+- テストの中で docker を操作するため、`app-failover-test` はホストの `docker.sock` をマウントします。ローカル検証専用の構成です。
+- Writer を停止するので、実行後の DB は元に戻りません。CI では、他のテストのあとに実行します。
+
+**フェイルオーバー直後の読み取りは、最大30秒待たされることがあります。** 昇格した `reader1` は Writer になっていますが、wrapper のトポロジーが更新される(`poc.wrapper.failover.topology-refresh-rate-ms`、既定5秒)まで、Reader の候補に残ることがあります。選ばれると、接続先が Reader ではないため、`verifyOpenedConnectionType` の確認に失敗し、`poc.wrapper.initial-connection.open-connection-retry-timeout-ms`(既定30秒)待ってから、別の Reader (`reader2`) に切り替わります。最終的には成功しますが、その間の読み取りは止まります。短くすれば待ち時間は減りますが、フェイルオーバー中に新しい接続がエラーになりやすくなります。
+
 **旧 Writer を先に停止する理由**: 先に昇格してから旧 Writer を停止すると、旧 Writer が停止時に書く最後の WAL を、まだ接続していた `reader2` だけが受け取り、昇格済みの `reader1` は受け取れません。その結果、`reader2` が新しい Writer より先に進み、追従できなくなります(本物の Aurora は、共有ストレージなので起きません)。
 また、昇格した `reader1` をネットワークに付け直すと、compose が付けたサービス名の別名が失われるため、別名を指定し直しています。
 
