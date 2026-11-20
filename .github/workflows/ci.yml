@@ -34,9 +34,12 @@ jobs:
       # compose のネットワーク内で、コネクションプールや読み書きの振り分けを確認する
       - name: テスト実行
         run: docker compose --profile test run --rm --build app-test
+      # Writer を停止して reader1 を昇格するため、DB が壊れる。他のテストのあと、後片付けの前に実行する
+      - name: フェイルオーバーのテスト
+        run: docker compose --profile failover-test run --rm --build app-failover-test
       - name: 失敗時のログ
         if: failure()
         run: docker compose logs --no-color
       - name: 後片付け
         if: always()
-        run: docker compose --profile test down -v
+        run: docker compose --profile test --profile failover-test down -v

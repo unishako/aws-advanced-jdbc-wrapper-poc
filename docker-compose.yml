@@ -207,6 +207,27 @@ services:
     networks:
       - aurora
 
+  # フェイルオーバーのテスト。Writer を停止して reader1 を昇格するため、実行後は DB が元に戻らない (scripts/reset-db.sh で作り直す)。
+  # テストの中で docker を操作するため、ホストの docker.sock をマウントする (ローカル検証専用)。
+  #   docker compose --profile failover-test run --rm app-failover-test
+  app-failover-test:
+    profiles: ["failover-test"]
+    build:
+      context: .
+      target: failover-test
+    depends_on:
+      postgres-writer:
+        condition: service_healthy
+      postgres-reader1:
+        condition: service_healthy
+      postgres-reader2:
+        condition: service_healthy
+    environment: *app-env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - aurora
+
 networks:
   aurora:
     name: aurora-poc
